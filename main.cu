@@ -38,11 +38,6 @@ struct Sphere {
 	}
 };
 
-struct Ray {
-	float3 origin;
-	float3 direction;
-};
-
 struct Scene {
 	int size;
 	Sphere* spheres;
@@ -67,15 +62,18 @@ __device__ void setElement(Bitmap b, int row, int col, float3 value) {
 	b.elements[row * b.stride + col] = value;
 }
 
-__device__ bool intersect(Ray r, Sphere s, float &distance) {
-	float dx = r.origin.x - s.position.x;
-	float dy = r.origin.y - s.position.y;
-	float dz = r.origin.z - s.position.z;
+__device__ bool intersect(int threadId, Sphere s, float &distance) {
+	extern __shared__ float3 rayBuffer[];
+
+
+	float dx = rayBuffer[threadId * 2].x - s.position.x;
+	float dy = rayBuffer[threadId * 2].y - s.position.y;
+	float dz = rayBuffer[threadId * 2].z - s.position.z;
 
 	float b = 2.0f * (
-		  r.direction.x * dx
-		+ r.direction.y * dy
-		+ r.direction.z * dz);
+		  rayBuffer[threadId * 2 + 1].x * dx
+		+ rayBuffer[threadId * 2 + 1].y * dy
+		+ rayBuffer[threadId * 2 + 1].z * dz);
 	float c = dx * dx + dy * dy + dz * dz - s.radius * s.radius;
 	float d = b * b - 4.0f * c;
 
@@ -91,13 +89,13 @@ __device__ bool intersect(Ray r, Sphere s, float &distance) {
 	return false;
 }
 
-__device__ int sceneIntersect(Ray r, Scene scene, float &closest_dist) {
+__device__ int sceneIntersect(int threadId, Scene scene, float &closest_dist) {
 	int closest_id = -1;
 	closest_dist = FLT_MAX;
 
 	for (int i = 0; i < scene.size; i++) {
 		float dist;
-		if (!intersect(r, scene.spheres[i], dist)) continue;
+		if (!intersect(threadId, scene.spheres[i], dist)) continue;
 
 		if (dist < closest_dist) {
 			closest_dist = dist;
@@ -136,36 +134,39 @@ __device__ float3 hemisphereSample(float3 normal, float &dot, curandState_t *sta
 	return normalize(result);
 }
 
-__device__ float3 traceRay(Ray ray, Scene scene, int level, curandState_t *state) {
+__device__ float3 traceRay(int threadId, Scene scene, int level, curandState_t *state) {
+	extern __shared__ float3 rayBuffer[];
+
 	float3 result = {0.0f, 0.0f, 0.0f};
 	float3 factor = {1.0f, 1.0f, 1.0f};
 
+#pragma unroll 128
 	for (int i = 0; i <= level; i++) {
 		float dist;
-		int id = sceneIntersect(ray, scene, dist);
+		int id = sceneIntersect(threadId, scene, dist);
 
 		if (id == -1) break;
 		Sphere sphere = scene.spheres[id];
 
-		ray.origin = make_float3(
-			ray.origin.x + ray.direction.x * dist,
-			ray.origin.y + ray.direction.y * dist,
-			ray.origin.z + ray.direction.z * dist);
+		rayBuffer[threadId * 2] = make_float3(
+			rayBuffer[threadId * 2].x + rayBuffer[threadId * 2 + 1].x * dist,
+			rayBuffer[threadId * 2].y + rayBuffer[threadId * 2 + 1].y * dist,
+			rayBuffer[threadId * 2].z + rayBuffer[threadId * 2 + 1].z * dist);
 
 		float3 normal = {
-				ray.origin.x - sphere.position.x,
-				ray.origin.y - sphere.position.y,
-				ray.origin.z - sphere.position.z
+				rayBuffer[threadId * 2].x - sphere.position.x,
+				rayBuffer[threadId * 2].y - sphere.position.y,
+				rayBuffer[threadId * 2].z - sphere.position.z
 		};
 
 		normal = normalize(normal);
 
 		float dot;
-		ray.direction = hemisphereSample(normal, dot, state);
+		rayBuffer[threadId * 2 + 1] = hemisphereSample(normal, dot, state);
 		
-		ray.origin.x += ray.direction.x * 0.001;
-		ray.origin.y += ray.direction.y * 0.001;
-		ray.origin.z += ray.direction.z * 0.001;
+		rayBuffer[threadId * 2].x += rayBuffer[threadId * 2 + 1].x * 0.001;
+		rayBuffer[threadId * 2].y += rayBuffer[threadId * 2 + 1].y * 0.001;
+		rayBuffer[threadId * 2].z += rayBuffer[threadId * 2 + 1].z * 0.001;
 
 		result.x += factor.x * sphere.emission.x;
 		result.y += factor.y * sphere.emission.y;
@@ -185,6 +186,8 @@ __global__ void setupPRNGs(curandState *state) {
 }
 
 __global__ void rayTrace(Scene scene, Bitmap bitmap, float3 cameraPos, float3 imagePlaneCentre, float3 xPixel, float3 yPixel, curandState *states) {
+	extern __shared__ float3 rayBuffer[];
+
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -195,21 +198,15 @@ __global__ void rayTrace(Scene scene, Bitmap bitmap, float3 cameraPos, float3 im
 	float xFactor = x - 0.5f * bitmap.width + 0.5f;
 	float yFactor = y - 0.5f * bitmap.height + 0.5f;
 	
-	float3 rayDir = {
+	rayBuffer[id * 2 + 1] = normalize(make_float3(
 		imagePlaneCentre.x + xPixel.x * xFactor + yPixel.x * yFactor,
 		imagePlaneCentre.y + xPixel.y * xFactor + yPixel.y * yFactor,
-		imagePlaneCentre.z + xPixel.z * xFactor + yPixel.z * yFactor,
-	};
+		imagePlaneCentre.z + xPixel.z * xFactor + yPixel.z * yFactor));
 
-	rayDir = normalize(rayDir);
+	rayBuffer[id * 2] = cameraPos;
 
-	Ray ray;
-	ray.origin = cameraPos;
-	ray.direction = rayDir;
-
-	float3 sample = traceRay(ray, scene, 5, &states[id]);
 	float3 current = getElement(bitmap, y, x);
-
+	float3 sample = traceRay(id, scene, 5, &states[id]);
 	current.x += sample.x;
 	current.y += sample.y;
 	current.z += sample.z;
@@ -375,10 +372,10 @@ int main() {
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
 
-	int noSamples = 1000;
+	int noSamples = 100;
 	printf("Starting the kernels...\n");
 	for (int i = 0; i < noSamples; i++) {
-		rayTrace<<<numBlocks, threadsPerBlock>>>(deviceScene, deviceBitmap, cameraPos, cameraToImagePlane, xPixel, yPixel, prngStates);
+		rayTrace<<<numBlocks, threadsPerBlock, threadsPerBlock.x * threadsPerBlock.y * sizeof(float3) * 2>>>(deviceScene, deviceBitmap, cameraPos, cameraToImagePlane, xPixel, yPixel, prngStates);
 		err = cudaGetLastError();
 		if (err != cudaSuccess) {
 			printf("Error while executing the child kernel!\n");
@@ -419,8 +416,8 @@ int main() {
 	printf("Saving complete.\n");
 	cudaDeviceReset();
 
-	int samplesTaken = noSamples * resX * resY;
-	printf("Traced %d pixels in %3.1f ms, average speed: %3.1f Mpixels per second", samplesTaken, time, (samplesTaken / 1000.0f / time));
+	unsigned long raysTraced = (long)noSamples * (long)resX * (long)resY * 5;
+	printf("Traced %lu rays in %3.1f ms, average speed: %3.1f MRays/s", raysTraced, time, (raysTraced / 1000.0f / time));
 
 	getch();
 }
