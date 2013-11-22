@@ -29,6 +29,13 @@ struct Sphere {
 		emission = make_float3(0.0f, 0.0f, 0.0f);
 		radius = 0.0f;
 	}
+
+	Sphere(float3 p, float r, float3 c, float3 e) {
+		position = p;
+		radius = r;
+		colour = c;
+		emission = e;
+	}
 };
 
 struct Ray {
@@ -48,7 +55,11 @@ struct Bitmap {
 	float3 *elements;
 };
 
-float3 getElement(const Bitmap b, int row, int col) {
+__device__ float3 getElement(const Bitmap b, int row, int col) {
+	return b.elements[row * b.stride + col];
+}
+
+float3 hostGetElement(const Bitmap b, int row, int col) {
 	return b.elements[row * b.stride + col];
 }
 
@@ -173,13 +184,11 @@ __global__ void setupPRNGs(curandState *state) {
 	curand_init(1234, id, 0, &state[id]);
 }
 
-__global__ void rayTrace(Scene scene, Bitmap bitmap, float3 cameraPos, float3 imagePlaneCentre, float3 xPixel, float3 yPixel, int noSamples, curandState *states) {
+__global__ void rayTrace(Scene scene, Bitmap bitmap, float3 cameraPos, float3 imagePlaneCentre, float3 xPixel, float3 yPixel, curandState *states) {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
 	int id = threadIdx.x + blockDim.x * threadIdx.y;
-
-	curandState state = states[id];
 
 	if (x >= bitmap.width || y >= bitmap.height) return;
 
@@ -198,22 +207,37 @@ __global__ void rayTrace(Scene scene, Bitmap bitmap, float3 cameraPos, float3 im
 	ray.origin = cameraPos;
 	ray.direction = rayDir;
 
-	float3 result = {0.0f, 0.0f, 0.0f};
+	float3 sample = traceRay(ray, scene, 5, &states[id]);
+	float3 current = getElement(bitmap, y, x);
 
-	for (int i = 0; i < noSamples; i++) {
-		float3 sample = traceRay(ray, scene, 5, &state);
-		result.x += sample.x;
-		result.y += sample.y;
-		result.z += sample.z;
-	}
+	current.x += sample.x;
+	current.y += sample.y;
+	current.z += sample.z;
 
-	float factor = 1.0f/noSamples;
+	setElement(bitmap, y, x, current);
+}
 
-	result.x *= factor;
-	result.y *= factor;
-	result.z *= factor;
+__global__ void scale(Bitmap bitmap, float factor) {
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if (x >= bitmap.width || y >= bitmap.height) return;
 
-	setElement(bitmap, y, x, result);
+	float3 pixel = getElement(bitmap, y, x);
+	pixel.x *= factor;
+	pixel.y *= factor;
+	pixel.z *= factor;
+
+	setElement(bitmap, y, x, pixel);
+}
+
+__global__ void zeroBitmap(Bitmap bitmap) {
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	if (x >= bitmap.width || y >= bitmap.height) return;
+
+	float3 pixel = {0.0f, 0.0f, 0.0f};
+
+	setElement(bitmap, y, x, pixel);
 }
 
 int clamp(float component) {
@@ -265,13 +289,13 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 		for (int j = 0; j < bitmap.width; j++) {
 			//Write the B, G, R to the output
 			unsigned char clamped;
-			clamped = clamp(getElement(bitmap, i, j).z);
+			clamped = clamp(hostGetElement(bitmap, i, j).z);
 			fwrite(&clamped, 1, 1, output);
 
-			clamped = clamp(getElement(bitmap, i, j).y);
+			clamped = clamp(hostGetElement(bitmap, i, j).y);
 			fwrite(&clamped, 1, 1, output);
 
-			clamped = clamp(getElement(bitmap, i, j).x);
+			clamped = clamp(hostGetElement(bitmap, i, j).x);
 			fwrite(&clamped, 1, 1, output);
 		}
         
@@ -284,25 +308,12 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 
 int main() {
 	Scene testScene;
-	testScene.size = 2;
-	testScene.spheres = new Sphere[2];
-	testScene.spheres[0].position.x = -5.0f;
-	testScene.spheres[0].position.y = 0.0f;
-	testScene.spheres[0].position.z = 10.0f;
-	testScene.spheres[0].radius = 5.0f;
-	testScene.spheres[0].colour.x = 1.0f;
-	testScene.spheres[0].colour.y = 0.0f;
-	testScene.spheres[0].colour.z = 0.0f;
-	testScene.spheres[0].emission.x = 1.0f;
-	testScene.spheres[0].emission.y = 0.5f;
-	testScene.spheres[0].emission.z = 0.5f;
-	testScene.spheres[1].position.x = 5.0f;
-	testScene.spheres[1].position.y = 0.0f;
-	testScene.spheres[1].position.z = 10.0f;
-	testScene.spheres[1].radius = 5.0f;
-	testScene.spheres[1].colour.x = 1.0f;
-	testScene.spheres[1].colour.y = 1.0f;
-	testScene.spheres[1].colour.z = 1.0f;
+	testScene.size = 3;
+	testScene.spheres = new Sphere[testScene.size];
+	
+	testScene.spheres[0] = Sphere(make_float3(0, 1000, 0), 1000, make_float3(0.5, 1.0, 0.5), make_float3(0, 0, 0));
+	testScene.spheres[1] = Sphere(make_float3(0, 0, 1020), 1000, make_float3(1, 1, 1), make_float3(0, 0, 0));
+	testScene.spheres[2] = Sphere(make_float3(0, -5, 10), 5, make_float3(1, 1, 1), make_float3(20, 10, 10));
 
 	Scene deviceScene = testScene;
 
@@ -314,10 +325,10 @@ int main() {
 	deviceBitmap.width = resX;
 	deviceBitmap.stride = resX;
 
-	float3 cameraPos = {0.0f, 0.0f, -10.0f};
+	float3 cameraPos = {0.0f, -5.0f, -10.0f};
 	float3 cameraToImagePlane = {0.0f, 0.0f, 10.0f};
 	float3 xPixel = {16.0f/resX, 0.0f, 0.0f};
-	float3 yPixel = {0.0f, -12.0f/resY, 0.0f};
+	float3 yPixel = {0.0f, 12.0f/resY, 0.0f};
 
 	dim3 threadsPerBlock(16, 16);
 
@@ -331,6 +342,7 @@ int main() {
 	printf("Allocating the array on the CUDA device...\n");
 	cudaMalloc(&(deviceScene.spheres), testScene.size * sizeof(Sphere));
 	cudaMalloc(&(deviceBitmap.elements), resX * resY * sizeof(float3));
+	zeroBitmap<<<numBlocks, threadsPerBlock>>>(deviceBitmap);
 	cudaMalloc(&prngStates, sizeof(curandState) * threadsPerBlock.x * threadsPerBlock.y);
 	err = cudaGetLastError();
 	if (err != cudaSuccess) {
@@ -354,22 +366,40 @@ int main() {
 		printf("Error while copying the scene!\n");
 		return -1;
 	}
+	
 
+	float time;
+	cudaEvent_t start, stop;
+	
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+
+	int noSamples = 1000;
 	printf("Starting the kernels...\n");
-	rayTrace<<<numBlocks, threadsPerBlock>>>(deviceScene, deviceBitmap, cameraPos, cameraToImagePlane, xPixel, yPixel, 100, prngStates);
-	err = cudaGetLastError();
-	if (err != cudaSuccess) {
-		printf("Error while executing the child kernel!\n");
-		return -1;
+	for (int i = 0; i < noSamples; i++) {
+		rayTrace<<<numBlocks, threadsPerBlock>>>(deviceScene, deviceBitmap, cameraPos, cameraToImagePlane, xPixel, yPixel, prngStates);
+		err = cudaGetLastError();
+		if (err != cudaSuccess) {
+			printf("Error while executing the child kernel!\n");
+			return -1;
+		}
+
+		//...and now we wait.
+		cudaDeviceSynchronize();
+		err = cudaGetLastError();
+		if (err != cudaSuccess) {
+			printf("Error while executing the child kernel!\n");
+			return -1;
+		}
 	}
 
-	//...and now we wait.
-	cudaDeviceSynchronize();
-	err = cudaGetLastError();
-	if (err != cudaSuccess) {
-		printf("Error while executing the child kernel!\n");
-		return -1;
-	}
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&time, start, stop);
+
+	float factor = 1.0f/noSamples;
+	scale<<<numBlocks, threadsPerBlock>>>(deviceBitmap, factor);
 
 	printf("Job finished, copying the buffer back...\n");
 
@@ -388,4 +418,9 @@ int main() {
 
 	printf("Saving complete.\n");
 	cudaDeviceReset();
+
+	int samplesTaken = noSamples * resX * resY;
+	printf("Traced %d pixels in %3.1f ms, average speed: %3.1f Mpixels per second", samplesTaken, time, (samplesTaken / 1000.0f / time));
+
+	getch();
 }
