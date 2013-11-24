@@ -50,7 +50,7 @@ struct Bitmap {
 	float3 *elements;
 };
 
-__device__ float3 getElement(const Bitmap b, int row, int col) {
+__device__ inline float3 getElement(const Bitmap b, int row, int col) {
 	return b.elements[row * b.stride + col];
 }
 
@@ -58,13 +58,12 @@ float3 hostGetElement(const Bitmap b, int row, int col) {
 	return b.elements[row * b.stride + col];
 }
 
-__device__ void setElement(Bitmap b, int row, int col, float3 value) {
+__device__ inline void setElement(Bitmap b, int row, int col, float3 value) {
 	b.elements[row * b.stride + col] = value;
 }
 
 __device__ bool intersect(int threadId, Sphere s, float &distance) {
 	extern __shared__ float3 rayBuffer[];
-
 
 	float dx = rayBuffer[threadId * 2].x - s.position.x;
 	float dy = rayBuffer[threadId * 2].y - s.position.y;
@@ -74,8 +73,8 @@ __device__ bool intersect(int threadId, Sphere s, float &distance) {
 		  rayBuffer[threadId * 2 + 1].x * dx
 		+ rayBuffer[threadId * 2 + 1].y * dy
 		+ rayBuffer[threadId * 2 + 1].z * dz);
-	float c = dx * dx + dy * dy + dz * dz - s.radius * s.radius;
-	float d = b * b - 4.0f * c;
+
+	float d = b * b - 4.0f * (dx * dx + dy * dy + dz * dz - s.radius * s.radius);
 
 	if (d < 0.0f) return false;
 
@@ -372,7 +371,7 @@ int main() {
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
 
-	int noSamples = 100;
+	int noSamples = 1000;
 	printf("Starting the kernels...\n");
 	for (int i = 0; i < noSamples; i++) {
 		rayTrace<<<numBlocks, threadsPerBlock, threadsPerBlock.x * threadsPerBlock.y * sizeof(float3) * 2>>>(deviceScene, deviceBitmap, cameraPos, cameraToImagePlane, xPixel, yPixel, prngStates);
@@ -419,5 +418,5 @@ int main() {
 	unsigned long raysTraced = (long)noSamples * (long)resX * (long)resY * 5;
 	printf("Traced %lu rays in %3.1f ms, average speed: %3.1f MRays/s", raysTraced, time, (raysTraced / 1000.0f / time));
 
-	getch();
+	//getch();
 }
