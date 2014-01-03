@@ -78,6 +78,7 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>32</TargetMachinePlatform>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -107,6 +108,9 @@
     </Link>
     <CudaCompile>
       <MaxRegCount>32</MaxRegCount>
+      <AdditionalCompilerOptions>
+      </AdditionalCompilerOptions>
+      <CodeGeneration>compute_30,sm_30</CodeGeneration>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

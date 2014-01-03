@@ -356,13 +356,14 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 
 int main() {
 	Scene testScene;
-	testScene.size = 3;
+	testScene.size = 4;
 	testScene.spheres = new Sphere[testScene.size];
 	
 	//Simulate planes with very large spheres.
 	testScene.spheres[0] = Sphere(make_float3(0, 1000, 0), 1000, make_float3(0.5, 1.0, 0.5), make_float3(0, 0, 0));
 	testScene.spheres[1] = Sphere(make_float3(0, 0, 1020), 1000, make_float3(1, 1, 1), make_float3(0, 0, 0));
-	testScene.spheres[2] = Sphere(make_float3(0, -5, 10), 5, make_float3(1, 1, 1), make_float3(20, 10, 10));
+	testScene.spheres[2] = Sphere(make_float3(0, -5, 10), 5, make_float3(0.5, 0.5, 0.9), make_float3(0.0, 0.0, 0.0));
+	testScene.spheres[3] = Sphere(make_float3(-5, -20, 20), 5, make_float3(0.5, 0.5, 0.5), make_float3(10.0, 10.0, 7.0));
 
 	Scene deviceScene = testScene;
 
