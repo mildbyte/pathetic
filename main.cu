@@ -117,7 +117,7 @@ __device__ int sceneIntersect(int threadId, Scene scene, float &closest_dist) {
 	return closest_id;
 }
 
-__device__ inline float3 normalize(float3 v) {
+__device__ __host__ inline float3 normalize(float3 v) {
 	float invdist = rsqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
 
 	float3 result = {
@@ -356,14 +356,16 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 
 int main() {
 	Scene testScene;
-	testScene.size = 4;
+	testScene.size = 6;
 	testScene.spheres = new Sphere[testScene.size];
 	
 	//Simulate planes with very large spheres.
-	testScene.spheres[0] = Sphere(make_float3(0, 1000, 0), 1000, make_float3(0.5, 1.0, 0.5), make_float3(0, 0, 0));
-	testScene.spheres[1] = Sphere(make_float3(0, 0, 1020), 1000, make_float3(1, 1, 1), make_float3(0, 0, 0));
-	testScene.spheres[2] = Sphere(make_float3(0, -5, 10), 5, make_float3(0.5, 0.5, 0.9), make_float3(0.0, 0.0, 0.0));
-	testScene.spheres[3] = Sphere(make_float3(-5, -20, 20), 5, make_float3(0.5, 0.5, 0.5), make_float3(10.0, 10.0, 7.0));
+	testScene.spheres[0] = Sphere(make_float3(0, 1000, 0), 1000, make_float3(0.2, 1, 0.2), make_float3(0, 0, 0));
+	testScene.spheres[1] = Sphere(make_float3(0, -5, 10), 5, make_float3(0.5, 0.5, 0.9), make_float3(0.0, 0.0, 0.0));
+	testScene.spheres[2] = Sphere(make_float3(4, 0, 1), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
+	testScene.spheres[3] = Sphere(make_float3(-7, 0, 5), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
+	testScene.spheres[4] = Sphere(make_float3(7, 0, 5), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
+	testScene.spheres[5] = Sphere(make_float3(9, -15, 15), 2, make_float3(0.5, 0.5, 0.5), make_float3(4.0, 4.0, 4.0));
 
 	Scene deviceScene = testScene;
 
@@ -375,10 +377,43 @@ int main() {
 	deviceBitmap.width = resX;
 	deviceBitmap.stride = resX;
 
-	float3 cameraPos = {0.0f, -5.0f, -10.0f};
-	float3 cameraToImagePlane = {0.0f, 0.0f, 10.0f};
-	float3 xPixel = {16.0f/resX, 0.0f, 0.0f};
-	float3 yPixel = {0.0f, 12.0f/resY, 0.0f};
+	//TODO: camera looking straight down is unsupported
+	//(because any rotation parallel to the camera axis is valid)
+	float3 cameraPos = {-3.0f, -5.0f, -10.0f};
+	float3 cameraDir = normalize(make_float3(0.1f, 0.0f, 1.0f));
+	float imagePlaneDistance = 10.0;
+	float imagePlaneWidth = 16.0;
+	float imagePlaneHeight = 12.0;
+
+	//Calculate the image plane X and Y vectors in the world coordinates
+	float3 imagePlaneX = normalize(make_float3(cameraDir.z, 0, -cameraDir.x));
+    float3 imagePlaneY = normalize(make_float3(
+		-cameraDir.y * cameraDir.x,
+		cameraDir.z * cameraDir.z + cameraDir.x * cameraDir.x,
+		-cameraDir.z * cameraDir.y
+	));
+
+	float3 cameraToImagePlane = {
+		cameraDir.x * imagePlaneDistance,
+		cameraDir.y * imagePlaneDistance,
+		cameraDir.z * imagePlaneDistance
+	};
+
+	float widthFactor = imagePlaneWidth / (float)resX;
+	float heightFactor = imagePlaneHeight / (float)resY;
+
+	//Calculate the vectors that represent one pixel in the image plane
+	float3 xPixel = {
+		imagePlaneX.x * widthFactor,
+		imagePlaneX.y * widthFactor,
+		imagePlaneX.z * widthFactor
+	};
+
+	float3 yPixel = {
+		imagePlaneY.x * heightFactor,
+		imagePlaneY.y * heightFactor,
+		imagePlaneY.z * heightFactor
+	};
 
 	dim3 threadsPerBlock(16, 16);
 
