@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <limits>
 #include <conio.h>
+#include <fstream>
+#include <string>
+#include <sstream>
+using namespace std;
 
 /* TODO:
  * use __shared__ for blocks
@@ -355,37 +359,65 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 }
 
 int main() {
-	Scene testScene;
-	testScene.size = 6;
-	testScene.spheres = new Sphere[testScene.size];
+	//Read the scene data from the file
+	ifstream sceneFile;
+	sceneFile.open("scene.txt", ios::in);
+
+	printf("Trying to read the scene description file...\n");
+
+	float3 cameraPos;
+	float3 cameraDir;
+	float imagePlaneWidth, imagePlaneHeight, imagePlaneDistance;
+	int resX, resY, noSamples;
+	Scene hostScene;
 	
-	//Simulate planes with very large spheres.
-	testScene.spheres[0] = Sphere(make_float3(0, 1000, 0), 1000, make_float3(0.2, 1, 0.2), make_float3(0, 0, 0));
-	testScene.spheres[1] = Sphere(make_float3(0, -5, 10), 5, make_float3(0.5, 0.5, 0.9), make_float3(0.0, 0.0, 0.0));
-	testScene.spheres[2] = Sphere(make_float3(4, 0, 1), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
-	testScene.spheres[3] = Sphere(make_float3(-7, 0, 5), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
-	testScene.spheres[4] = Sphere(make_float3(7, 0, 5), 2, make_float3(0.5, 0.5, 0.5), make_float3(2.0, 2.0, 2.0));
-	testScene.spheres[5] = Sphere(make_float3(9, -15, 15), 2, make_float3(0.5, 0.5, 0.5), make_float3(4.0, 4.0, 4.0));
+	//Skip empty lines and comments, greedily consume all floats using an istringstream
+	string line;
+	do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+	istringstream iss(line);
+	iss >> cameraPos.x >> cameraPos.y >> cameraPos.z;
+	do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+	iss = istringstream(line);
+	iss >> cameraDir.x >> cameraDir.y >> cameraDir.z;
+	do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+	iss = istringstream(line);
+	iss >> imagePlaneWidth >> imagePlaneHeight >> imagePlaneDistance;
+	do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+	iss = istringstream(line);
+	iss >> resX >> resY >> noSamples;
+	do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+	iss = istringstream(line);
+	iss >> hostScene.size;
+	hostScene.spheres = new Sphere[hostScene.size];
 
-	Scene deviceScene = testScene;
+	//Input the spheres in the scene.
+	for (int i = 0; i < hostScene.size; i++) {
+		float3 position, colour, emittance;
+		float radius;
 
-	int resX = 640;
-	int resY = 480;
+		do getline(sceneFile, line); while (line.empty() || line[0] == ';');
+		iss = istringstream(line);
+		iss >> position.x >> position.y >> position.z >> radius >>\
+			colour.x >> colour.y >> colour.z >> emittance.x >>\
+			emittance.y >> emittance.z;
+
+		hostScene.spheres[i] = Sphere(position, radius, colour, emittance);
+	}
+
+	sceneFile.close();
+
+	printf("Scene file parsed.\n");
+
+	Scene deviceScene = hostScene;
 
 	Bitmap deviceBitmap;
 	deviceBitmap.height = resY;
 	deviceBitmap.width = resX;
 	deviceBitmap.stride = resX;
 
+	//Calculate the image plane X and Y vectors in the world coordinates
 	//TODO: camera looking straight down is unsupported
 	//(because any rotation parallel to the camera axis is valid)
-	float3 cameraPos = {-3.0f, -5.0f, -10.0f};
-	float3 cameraDir = normalize(make_float3(0.1f, 0.0f, 1.0f));
-	float imagePlaneDistance = 10.0;
-	float imagePlaneWidth = 16.0;
-	float imagePlaneHeight = 12.0;
-
-	//Calculate the image plane X and Y vectors in the world coordinates
 	float3 imagePlaneX = normalize(make_float3(cameraDir.z, 0, -cameraDir.x));
     float3 imagePlaneY = normalize(make_float3(
 		-cameraDir.y * cameraDir.x,
@@ -427,7 +459,7 @@ int main() {
 	//Allocate the memory for the scene, the bitmap, the random generator state
 	//and initialize the bitmap.
 	printf("Allocating the array on the CUDA device...\n");
-	cudaMalloc(&(deviceScene.spheres), testScene.size * sizeof(Sphere));
+	cudaMalloc(&(deviceScene.spheres), hostScene.size * sizeof(Sphere));
 	cudaMalloc(&(deviceBitmap.elements), resX * resY * sizeof(float3));
 	zeroBitmap<<<numBlocks, threadsPerBlock>>>(deviceBitmap);
 	cudaMalloc(&prngStates, sizeof(curandState) * threadsPerBlock.x * threadsPerBlock.y);
@@ -448,7 +480,7 @@ int main() {
 
 	//Send the scene to the card memory.
 	printf("Copying the scene to the CUDA device...\n");
-	cudaMemcpy(deviceScene.spheres, testScene.spheres, testScene.size * sizeof(Sphere), cudaMemcpyHostToDevice);
+	cudaMemcpy(deviceScene.spheres, hostScene.spheres, hostScene.size * sizeof(Sphere), cudaMemcpyHostToDevice);
 	err = cudaGetLastError();
 	if (err != cudaSuccess) {
 		printf("Error while copying the scene!\n");
@@ -462,8 +494,6 @@ int main() {
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-
-	int noSamples = 10000;
 
 	//Perform noSamples samples and accumulate them in the bitmap.
 	printf("Starting the kernels...\n");

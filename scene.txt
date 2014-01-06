@@ -1,0 +1,33 @@
+; pathetic scene description file
+; empty lines and lines starting with ; are ignored
+
+; camera options
+; position
+0.0 -7.5 -15.0
+; direction
+0.0 0.0 1.0
+; image plane width, height and distance
+20.0 15.0 15.0
+
+; resolution and samples per pixel
+640 480 10000
+
+; list of spheres: position, radius, colour, emittance
+; number of spheres
+10
+;POSITION RADIUS    COLOUR    EMITTANCE
+; lights
+-3 -13 6     1   0.5 0.5 0.5   100 0 0
+0 -13 2      1   0.5 0.5 0.5   0 100 0
+3 -13 6      1   0.5 0.5 0.5   0 0 100
+; central sphere
+0 -5 10      5   0.5 0.5 0.9   0 0 0
+; bottom and top walls
+0 1000 0    1000   1 1 1       0 0 0
+0 -1015 0   1000   1 1 1       0 0 0
+; left and right walls
+-1010 0 0   1000  0.8 0.8 1.0  0 0 0
+1010 0 0    1000  1.0 0.8 0.8  0 0 0
+; front and back walls
+0 0 1015    1000  0.8 1.0 0.8  0 0 0
+0 0 -1015   1000  1.0 1.0 1.0  0 0 0
