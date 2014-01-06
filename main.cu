@@ -55,11 +55,7 @@ struct Bitmap {
 	float3 *elements;
 };
 
-__device__ inline float3 getElement(const Bitmap b, int row, int col) {
-	return b.elements[row * b.stride + col];
-}
-
-float3 hostGetElement(const Bitmap b, int row, int col) {
+__device__ __host__ inline float3 getElement(const Bitmap b, int row, int col) {
 	return b.elements[row * b.stride + col];
 }
 
@@ -341,13 +337,13 @@ void saveBitmapToFile(Bitmap bitmap, char *filename) {
 		for (int j = 0; j < bitmap.width; j++) {
 			//Write the B, G, R to the output
 			unsigned char clamped;
-			clamped = clamp(hostGetElement(bitmap, i, j).z);
+			clamped = clamp(getElement(bitmap, i, j).z);
 			fwrite(&clamped, 1, 1, output);
 
-			clamped = clamp(hostGetElement(bitmap, i, j).y);
+			clamped = clamp(getElement(bitmap, i, j).y);
 			fwrite(&clamped, 1, 1, output);
 
-			clamped = clamp(hostGetElement(bitmap, i, j).x);
+			clamped = clamp(getElement(bitmap, i, j).x);
 			fwrite(&clamped, 1, 1, output);
 		}
         
